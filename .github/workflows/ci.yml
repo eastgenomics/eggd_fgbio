@@ -16,8 +16,12 @@ jobs:
           python-version: "3.12"
       - name: dxapp.json is valid JSON
         run: python3 -m json.tool dxapp.json > /dev/null
-      - name: ShellCheck
-        run: shellcheck --version && shellcheck -x src/code.sh resources/home/dnanexus/clip_overlap.sh
+      - name: ShellCheck 0.11.0 (release binary, SHA-256 checked)
+        run: |
+          curl -sSfL -o sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  sc.tar.xz" | sha256sum -c -
+          tar -xJf sc.tar.xz && ./shellcheck-v0.11.0/shellcheck --version
+          ./shellcheck-v0.11.0/shellcheck -x src/code.sh resources/home/dnanexus/clip_overlap.sh
       - name: Ruff
         run: python -m pip install -r requirements-dev.txt && ruff check .
   test:
@@ -29,14 +33,20 @@ jobs:
       - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
         with:
           python-version: "3.12"
-      - name: Install samtools and pytest
+      - name: samtools and bgzip 1.24 (the app's version; release tarball, SHA-256 checked)
         run: |
-          sudo apt-get update -q && sudo apt-get install -y -q samtools
-          python -m pip install -r requirements-dev.txt
+          sudo apt-get update -q && sudo apt-get install -y -q libbz2-dev liblzma-dev libcurl4-openssl-dev libncurses-dev zlib1g-dev
+          curl -sSfL -o samtools-1.24.tar.bz2 https://github.com/samtools/samtools/releases/download/1.24/samtools-1.24.tar.bz2
+          echo "89b2a440123eeaa400392ce1736e7d60ce9041843027d76819753c5a8246bfdd  samtools-1.24.tar.bz2" | sha256sum -c -
+          tar -xjf samtools-1.24.tar.bz2 && cd samtools-1.24 && ./configure -q --prefix="$HOME/st" && make -s -j4 && make -s install
+          make -s -C htslib-1.24 bgzip && cp htslib-1.24/bgzip "$HOME/st/bin/"
+          echo "$HOME/st/bin" >> "$GITHUB_PATH"
+      - name: Python test dependencies
+        run: python -m pip install -r requirements-dev.txt
       - name: fgbio image, pinned by digest (the app bundles the same image)
         run: |
           docker pull quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace
           docker tag quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace \
             quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0
       - name: pytest
-        run: python -m pytest -v tests
+        run: samtools --version | head -1 && python -m pytest -v tests
