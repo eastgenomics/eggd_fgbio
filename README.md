@@ -2,13 +2,13 @@
 # eggd_fgbio (DNAnexus Platform App)
 
 Runs [fgbio](https://github.com/fulcrumgenomics/fgbio) tools on DNAnexus. Version 1.0.0 runs one tool, `ClipBam`, to
-soft-clip the part of each read pair where the two reads overlap.
+soft-clip the part of each FR read pair (primary alignments) where the two reads overlap.
 
 ## What does this app do?
 
 When the two reads of a pair overlap, a base in the overlap is sequenced twice from the same DNA fragment. Tools that
 count reads at a site, such as AMBER, would count it twice. This app soft-clips the overlap so that each base of the
-fragment is covered by one read only:
+fragment is covered by one read only (see below for the alignments fgbio clips):
 
 ```
 samtools sort -n  ->  fgbio ClipBam -c Soft --clip-overlapping-reads true  ->  samtools sort  ->  samtools index
