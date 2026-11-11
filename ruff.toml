@@ -1,8 +1,11 @@
 line-length = 130
 
 [lint]
-select = ["E9", "F", "B", "S", "BLE"]
+select = ["E9", "F", "B", "S", "BLE", "D"]  # D: docstrings (pydocstyle), PEP 257 conventions
 ignore = ["S101"]  # pytest asserts
+
+[lint.pydocstyle]
+convention = "pep257"
 
 [lint.per-file-ignores]
 # The tests run the app's own script and samtools with fixed argument lists (S603, S607), and draw a synthetic reference

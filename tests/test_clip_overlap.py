@@ -26,15 +26,23 @@ PAIRS = {
 
 
 def run(cmd, **kw):
+    """Run a command, failing the test on a non-zero exit, and return the completed process."""
     return subprocess.run(cmd, check=True, capture_output=True, text=True, **kw)
 
 
 def revcomp(s):
+    """Return the reverse complement of a DNA sequence."""
     return s[::-1].translate(str.maketrans("ACGT", "TGCA"))
 
 
 @pytest.fixture(scope="module")
 def data(tmp_path_factory):
+    """Make the synthetic reference and BAM used by every test.
+
+    The reference is two random 6 kb contigs (fixed seed), written plain and bgzipped with their indexes. The BAM holds
+    the read pairs in PAIRS on chr1, all FR orientation with 100-base reads, and a pair with an unmapped mate on chr2.
+    Returns the directory holding ref.fa, ref.fa.gz and in.bam with their indexes.
+    """
     d = tmp_path_factory.mktemp("data")
     rnd = random.Random(4247)
     seq = {c: "".join(rnd.choice("ACGT") for _ in range(6000)) for c in ("chr1", "chr2")}
@@ -63,7 +71,10 @@ def data(tmp_path_factory):
 
 
 def records(bam):
-    """(name, read1/read2 bits) -> dict of flag, pos, cigar, seq, qual (tags are left out: fgbio may update them)."""
+    """Return the records of a BAM keyed by read name and read-1/read-2 bits.
+
+    Each value holds flag, pos, cigar, seq and qual. Tags are left out because fgbio may update them.
+    """
     out = {}
     for line in run(["samtools", "view", str(bam)]).stdout.splitlines():
         f = line.split("\t")
@@ -72,11 +83,13 @@ def records(bam):
 
 
 def ref_end(pos, cigar):
+    """Return the 1-based reference position of the last base an alignment covers."""
     return pos + sum(int(n) for n, op in re.findall(r"(\d+)([MIDNSHP=X])", cigar) if op in "MDN=X") - 1
 
 
 @pytest.fixture(scope="module")
 def clipped(data, tmp_path_factory):
+    """Run clip_overlap.sh on the synthetic BAM with the plain reference and return its output directory."""
     o = tmp_path_factory.mktemp("out")
     run(["bash", str(SCRIPT), "-i", str(data / "in.bam"), "-r", str(data / "ref.fa"), "-o", str(o / "s"), "-t", "2",
          "-m", "100M", "-x", "1", "-w", str(o / "work")])
@@ -85,7 +98,7 @@ def clipped(data, tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def clipped_bgzf(data, tmp_path_factory):
-    """The same run with the bgzipped reference (.fa.gz with .fai and .gzi), as in production."""
+    """Run clip_overlap.sh with the bgzipped reference (.fa.gz, .fai, .gzi), as in production; return its output directory."""
     o = tmp_path_factory.mktemp("out_bgzf")
     run(["bash", str(SCRIPT), "-i", str(data / "in.bam"), "-r", str(data / "ref.fa.gz"), "-o", str(o / "s"), "-t", "2",
          "-m", "100M", "-x", "1", "-w", str(o / "work")])
@@ -93,15 +106,18 @@ def clipped_bgzf(data, tmp_path_factory):
 
 
 def test_outputs_exist(clipped):
+    """Check that the clipped BAM, its index, the ClipBam metrics and the provenance are written and not empty."""
     for suffix in (".clipped.bam", ".clipped.bam.bai", ".clipbam_metrics.txt", ".provenance.tsv"):
         assert (clipped / f"s{suffix}").stat().st_size > 0, suffix
 
 
 def test_record_count_unchanged(data, clipped):
+    """Check that clipping neither adds nor removes records."""
     assert len(records(clipped / "s.clipped.bam")) == len(records(data / "in.bam")) == 2 * len(PAIRS) + 2
 
 
 def test_overlapping_pairs_no_longer_overlap(clipped):
+    """Check that both overlapping pairs are soft-clipped, no longer overlap, and split the 40-base overlap between mates."""
     rec = records(clipped / "s.clipped.bam")
     for name in ("overlap_40", "overlap_full"):
         r1, r2 = rec[(name, 0x40)], rec[(name, 0x80)]
@@ -114,7 +130,7 @@ def test_overlapping_pairs_no_longer_overlap(clipped):
 
 
 def test_clipping_keeps_flags_sequence_and_qualities(data, clipped):
-    """Soft clipping keeps every base: flag, sequence and qualities are unchanged for all reads, clipped or not."""
+    """Check that soft clipping keeps every base: flag, sequence and qualities are unchanged for all reads."""
     before, after = records(data / "in.bam"), records(clipped / "s.clipped.bam")
     for key in before:
         for field in ("flag", "seq", "qual"):
@@ -122,7 +138,7 @@ def test_clipping_keeps_flags_sequence_and_qualities(data, clipped):
 
 
 def test_other_reads_keep_position_and_cigar(data, clipped):
-    """Reads that do not overlap their mate keep flag, position, CIGAR, sequence and qualities (tags may change)."""
+    """Check that reads not overlapping their mate keep flag, position, CIGAR, sequence and qualities (tags may change)."""
     before, after = records(data / "in.bam"), records(clipped / "s.clipped.bam")
     for key in before:
         if key[0] not in ("overlap_40", "overlap_full"):
@@ -130,16 +146,19 @@ def test_other_reads_keep_position_and_cigar(data, clipped):
 
 
 def test_bgzipped_reference_gives_the_same_records(clipped, clipped_bgzf):
+    """Check that the bgzipped and plain references give the same flags, positions, CIGARs, sequences and qualities."""
     assert records(clipped_bgzf / "s.clipped.bam") == records(clipped / "s.clipped.bam")
 
 
 def provenance(path):
+    """Read a provenance TSV, check it has three columns throughout, and return field -> (value, qc_failed)."""
     rows = [line.split("\t") for line in path.read_text().splitlines()]
     assert rows[0] == ["field", "value", "qc_failed"] and all(len(r) == 3 for r in rows), rows
     return {r[0]: (r[1], r[2]) for r in rows[1:]}
 
 
 def test_provenance(clipped):
+    """Check the provenance fields, versions, image ID, record counts and flagstat rows of a run."""
     prov = provenance(clipped / "s.provenance.tsv")
     assert prov["fgbio_version"][0] == "4.1.1"
     assert prov["fgbio_image"][0] == IMAGE
@@ -154,7 +173,7 @@ def test_provenance(clipped):
 
 
 def test_unreadable_provenance_value_fails(data, tmp_path):
-    """A samtools whose --version prints nothing: the job fails instead of writing incomplete provenance."""
+    """Check that a samtools whose --version prints nothing fails the run instead of writing incomplete provenance."""
     real = shutil.which("samtools")
     fake = tmp_path / "bin" / "samtools"
     fake.parent.mkdir()
@@ -169,6 +188,7 @@ def test_unreadable_provenance_value_fails(data, tmp_path):
 
 
 def test_missing_fai_fails(data, tmp_path):
+    """Check that a reference without its .fai index fails with an ERROR: message."""
     (tmp_path / "ref.fa").write_text((data / "ref.fa").read_text())
     r = subprocess.run(["bash", str(SCRIPT), "-i", str(data / "in.bam"), "-r", str(tmp_path / "ref.fa"),
                         "-o", str(tmp_path / "s")], capture_output=True, text=True)
@@ -176,6 +196,7 @@ def test_missing_fai_fails(data, tmp_path):
 
 
 def test_not_a_bam_fails(data, tmp_path):
+    """Check that an input that is not a BAM fails with an ERROR: message."""
     bad = tmp_path / "bad.bam"
     bad.write_text("not a bam\n")
     r = subprocess.run(["bash", str(SCRIPT), "-i", str(bad), "-r", str(data / "ref.fa"), "-o", str(tmp_path / "s")],
@@ -184,6 +205,7 @@ def test_not_a_bam_fails(data, tmp_path):
 
 
 def test_missing_image_fails(data, tmp_path):
+    """Check that a fgbio image that is not loaded fails with an ERROR: message."""
     r = subprocess.run(["bash", str(SCRIPT), "-i", str(data / "in.bam"), "-r", str(data / "ref.fa"), "-o",
                         str(tmp_path / "s"), "-I", "example.invalid/none:0"], capture_output=True, text=True)
     assert r.returncode == 1 and "is not loaded" in r.stderr
