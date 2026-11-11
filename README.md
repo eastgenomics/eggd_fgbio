@@ -2,19 +2,22 @@
 # eggd_fgbio (DNAnexus Platform App)
 
 Runs [fgbio](https://github.com/fulcrumgenomics/fgbio) tools on DNAnexus. Version 1.0.0 runs one tool, `ClipBam`, to
-soft-clip the overlapping part of each read pair in a BAM.
+soft-clip the part of each read pair where the two reads overlap.
 
 ## What does this app do?
 
 When the two reads of a pair overlap, a base in the overlap is sequenced twice from the same DNA fragment. Tools that
-count reads at a site, such as AMBER, would count it twice. This app soft-clips the overlap so that each base of a
+count reads at a site, such as AMBER, would count it twice. This app soft-clips the overlap so that each base of the
 fragment is covered by one read only:
 
 ```
 samtools sort -n  ->  fgbio ClipBam -c Soft --clip-overlapping-reads true  ->  samtools sort  ->  samtools index
 ```
 
-Reads are not removed or unmapped; the app fails if the output does not hold exactly as many records as the input.
+fgbio clips overlaps between the primary alignments of FR pairs (mates on the same contig, facing each other);
+secondary and supplementary alignments and other orientations are not clipped. Soft clipping keeps every base: reads are
+not removed or unmapped, and flags, sequences and qualities are unchanged; fgbio may update tags (for example mate
+information). The app fails if the output does not hold exactly as many records as the input.
 
 ## What are the typical use cases for this app?
 
@@ -41,7 +44,9 @@ A sequence dictionary for the reference is made on the worker with `samtools dic
 | `clipped_bam` | `<prefix>.clipped.bam`, coordinate-sorted |
 | `clipped_bai` | `<prefix>.clipped.bam.bai` |
 | `clipbam_metrics` | `<prefix>.clipbam_metrics.txt`, fgbio's clipping metrics |
-| `provenance` | `<prefix>.provenance.tsv`: app, fgbio image and version, samtools version, settings, runtime, record counts and flagstat before and after |
+| `provenance` | `<prefix>.provenance.tsv` (columns `field`, `value`, `qc_failed`): app, fgbio image ID and version, samtools version, settings, runtime, record counts, and `samtools flagstat` before (`flagstat_in:`) and after (`flagstat_out:`) with QC-passed and QC-failed counts |
+
+The job fails, before any output is published, if any provenance value cannot be read.
 
 ## How to run this app from the command line?
 
@@ -66,8 +71,11 @@ The default instance is `mem2_ssd1_v2_x16`; a 6 GB panel BAM (about 100 million 
 ## Tests
 
 `tests/test_clip_overlap.py` runs `resources/home/dnanexus/clip_overlap.sh` on a small synthetic BAM (generated in
-the test): overlapping pairs are clipped and no longer overlap, other reads are unchanged, the record count is kept, and
-bad inputs fail with an `ERROR:` message. It needs samtools and the fgbio image in the local docker daemon:
+the test). It checks that overlapping pairs are clipped and no longer overlap; that flags, sequences and qualities are
+unchanged for every read, and positions and CIGARs for reads that do not overlap their mate; that the record count is
+kept; that a bgzipped reference gives the same records as a plain one; that the provenance has its fields; and that bad
+inputs and an unreadable provenance value fail with an `ERROR:` message. It needs samtools, bgzip and the fgbio image in
+the local docker daemon:
 
 ```bash
 docker pull quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace
@@ -76,7 +84,8 @@ docker tag quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c
 python -m pip install -r requirements-dev.txt && python -m pytest tests
 ```
 
-CI (`.github/workflows/ci.yml`) runs these tests, ShellCheck and Ruff on every push and pull request.
+CI (`.github/workflows/ci.yml`) runs these tests with samtools/htslib 1.24 (the app's version, built from the release
+tarball), ShellCheck 0.11.0 and Ruff on every push and pull request.
 
 ## Making the bundled image
 
@@ -91,10 +100,12 @@ tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='2026-11-11 00:00Z' 
 ```
 
 The bundle is uploaded to DNAnexus and its file ID set in `dxapp.json`; the SHA-256 of the inner `.docker.tar` is set
-in `src/code.sh`.
+in `src/code.sh`. The v1.0.0 bundle is `file-JFp2PYj453Kg6KGFB694q6bf`, in 001_Reference at
+`/app_assets/fgbio/fgbio_4.1.1/` (a copy into another project keeps the file ID). `dx build --app` copies it into the
+app, so the built app does not depend on the source file.
 
 ## Release
 
 Following the Bioinformatics Development Manual v3: build the app from the reviewed commit, test it, record the
 evidence on the validation report in Confluence (DV), and after sign-off publish that same app
-(`dx publish eggd_fgbio/<version>`), merge the release branch into `main` and tag the release.
+(for v1.0.0: `dx publish eggd_fgbio/1.0.0`), merge the release branch into `main` and tag the release.
