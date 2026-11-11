@@ -15,9 +15,12 @@ samtools sort -n  ->  fgbio ClipBam -c Soft --clip-overlapping-reads true  ->  s
 ```
 
 fgbio clips overlaps between the primary alignments of FR pairs (mates on the same contig, facing each other);
-secondary and supplementary alignments and other orientations are not clipped. Soft clipping keeps every base: reads are
-not removed or unmapped, and flags, sequences and qualities are unchanged; fgbio may update tags (for example mate
-information). The app fails if the output does not hold exactly as many records as the input.
+secondary and supplementary alignments and other orientations are not clipped. Soft clipping keeps every base: no read
+is removed, and sequences and qualities are unchanged; fgbio may update tags (for example mate information). In rare
+alignments (for example a read whose remaining aligned part would start inside a deletion) fgbio can leave a one-base
+overlap or unmap a read, changing its flag; on a 103,775,448-record panel BAM the mapped, properly-paired and
+mate-mapped counts were the same before and after. The app fails if the output does not hold exactly as many records as
+the input.
 
 ## What are the typical use cases for this app?
 
