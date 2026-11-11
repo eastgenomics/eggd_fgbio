@@ -41,7 +41,7 @@ def data(tmp_path_factory):
 
     The reference is two random 6 kb contigs (fixed seed), written plain and bgzipped with their indexes. The BAM holds
     the read pairs in PAIRS on chr1, all FR orientation with 100-base reads, and a pair with an unmapped mate on chr2.
-    Returns the directory holding ref.fa, ref.fa.gz and in.bam with their indexes.
+    Returns the directory holding ref.fa and ref.fa.gz with their indexes, and in.bam (coordinate-sorted, not indexed).
     """
     d = tmp_path_factory.mktemp("data")
     rnd = random.Random(4247)
@@ -112,21 +112,25 @@ def test_outputs_exist(clipped):
 
 
 def test_record_count_unchanged(data, clipped):
-    """Check that clipping neither adds nor removes records."""
-    assert len(records(clipped / "s.clipped.bam")) == len(records(data / "in.bam")) == 2 * len(PAIRS) + 2
+    """Check that clipping neither adds nor removes records, counted with samtools view -c."""
+    n_in, n_out = (int(run(["samtools", "view", "-c", str(bam)]).stdout) for bam in (data / "in.bam", clipped / "s.clipped.bam"))
+    assert n_out == n_in == 2 * len(PAIRS) + 2
 
 
 def test_overlapping_pairs_no_longer_overlap(clipped):
-    """Check that both overlapping pairs are soft-clipped, no longer overlap, and split the 40-base overlap between mates."""
+    """Check that both overlapping pairs are soft-clipped and no longer overlap, and that the 40-base overlap is split.
+
+    fgbio clips each mate back to the midpoint of the overlap, so each read of the 40-base pair keeps 80 aligned bases.
+    """
     rec = records(clipped / "s.clipped.bam")
     for name in ("overlap_40", "overlap_full"):
         r1, r2 = rec[(name, 0x40)], rec[(name, 0x80)]
         p1, c1, p2, c2 = r1["pos"], r1["cigar"], r2["pos"], r2["cigar"]
         assert "S" in c1 + c2, (name, c1, c2)
         assert ref_end(p1, c1) < p2 or ref_end(p2, c2) < p1, (name, p1, c1, p2, c2)
-    # 40 overlapping bases are split between the two reads
+    # the 40 overlapping bases are split evenly between the two reads: each keeps 100 - 20 aligned bases
     r1, r2 = rec[("overlap_40", 0x40)], rec[("overlap_40", 0x80)]
-    assert ref_end(r1["pos"], r1["cigar"]) - r1["pos"] + 1 + ref_end(r2["pos"], r2["cigar"]) - r2["pos"] + 1 == 2 * READ_LEN - 40
+    assert [ref_end(r["pos"], r["cigar"]) - r["pos"] + 1 for r in (r1, r2)] == [READ_LEN - 20, READ_LEN - 20], (r1, r2)
 
 
 def test_clipping_keeps_flags_sequence_and_qualities(data, clipped):
@@ -201,11 +205,11 @@ def test_not_a_bam_fails(data, tmp_path):
     bad.write_text("not a bam\n")
     r = subprocess.run(["bash", str(SCRIPT), "-i", str(bad), "-r", str(data / "ref.fa"), "-o", str(tmp_path / "s")],
                        capture_output=True, text=True)
-    assert r.returncode == 1 and "is not a valid BAM" in r.stderr
+    assert r.returncode == 1 and "ERROR: input" in r.stderr and "is not a valid BAM" in r.stderr
 
 
 def test_missing_image_fails(data, tmp_path):
     """Check that a fgbio image that is not loaded fails with an ERROR: message."""
     r = subprocess.run(["bash", str(SCRIPT), "-i", str(data / "in.bam"), "-r", str(data / "ref.fa"), "-o",
                         str(tmp_path / "s"), "-I", "example.invalid/none:0"], capture_output=True, text=True)
-    assert r.returncode == 1 and "is not loaded" in r.stderr
+    assert r.returncode == 1 and "ERROR: docker image" in r.stderr and "is not loaded" in r.stderr
