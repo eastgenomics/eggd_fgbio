@@ -1,0 +1,37 @@
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+      - name: dxapp.json is valid JSON
+        run: python3 -m json.tool dxapp.json > /dev/null
+      - name: ShellCheck
+        run: shellcheck --version && shellcheck -x src/code.sh resources/home/dnanexus/clip_overlap.sh
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+      - name: Install samtools and pytest
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q samtools
+          python -m pip install -r requirements-dev.txt
+      - name: fgbio image, pinned by digest (the app bundles the same image)
+        run: |
+          docker pull quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace
+          docker tag quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace \
+            quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0
+      - name: pytest
+        run: python -m pytest -v tests
