@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# clip_overlap.sh: soft-clip the overlapping part of each read pair with fgbio ClipBam, so that a base covered by both
-# reads of a pair is counted once (eggd_fgbio; DI-4247). No DNAnexus calls: the app's src/code.sh and the tests run it.
+# clip_overlap.sh: soft-clip the overlapping part of read pairs with fgbio ClipBam, so that a base covered by both reads
+# of a pair is counted once (eggd_fgbio; DI-4247). No DNAnexus calls: the app's src/code.sh and the tests run it.
+# fgbio clips overlaps between the primary alignments of FR pairs (mates mapped to the same contig, facing each other);
+# secondary and supplementary alignments and other orientations are not clipped. Read tags may be updated.
 #
 # usage: clip_overlap.sh -i <in.bam> -r <ref.fa.gz> -o <out_prefix> [-I <docker image>] [-t <threads>] [-m <sort mem/thread>]
 #                        [-x <fgbio heap GB>] [-w <work dir>]
@@ -8,7 +10,7 @@
 # Steps (as the validation run, Confluence 4871323786 T7/T8):
 #   samtools sort -n | fgbio ClipBam -c Soft --clip-overlapping-reads true | samtools sort | samtools index
 # Writes <out_prefix>.clipped.bam, .clipped.bam.bai, .clipbam_metrics.txt and .provenance.tsv.
-# Fails if the output does not hold exactly as many records as the input.
+# Fails if the output does not hold exactly as many records as the input, or if a provenance value cannot be read.
 set -euo pipefail
 
 IMAGE="quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0"
@@ -79,17 +81,27 @@ n_in=$(samtools view -c -@ "$THREADS" "$IN")
 n_out=$(samtools view -c -@ "$THREADS" "$OUT.clipped.bam")
 [ "$n_in" = "$n_out" ] || die "record count changed: input $n_in, output $n_out"
 
+# provenance: every value is read and checked before the file is written; a missing value fails the job
+image_id=$(docker image inspect --format '{{.Id}}' "$IMAGE")
+fgbio_version=$("${DK[@]}" fgbio --version 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | awk '/Version/{print $2}')
+samtools_version=$(samtools --version | awk 'NR == 1 {print $2}')
+flag_in=$(samtools flagstat -O tsv -@ "$THREADS" "$IN")
+flag_out=$(samtools flagstat -O tsv -@ "$THREADS" "$OUT.clipped.bam")
+for v in image_id fgbio_version samtools_version flag_in flag_out; do
+    [ -n "${!v}" ] || die "provenance value $v could not be read"
+done
 {
-    printf 'field\tvalue\n'
-    printf 'fgbio_image\t%s\n' "$IMAGE"
-    printf 'fgbio_image_id\t%s\n' "$(docker image inspect --format '{{.Id}}' "$IMAGE")"
-    printf 'fgbio_version\t%s\n' "$("${DK[@]}" fgbio --version 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | awk '/Version/{print $2}')"
-    printf 'samtools_version\t%s\n' "$(samtools --version | head -1 | awk '{print $2}')"
-    printf 'clipbam_args\t%s\n' "-c Soft --clip-overlapping-reads true"
-    printf 'threads\t%s\nsort_mem_per_thread\t%s\nfgbio_heap_gb\t%s\n' "$THREADS" "$SORT_MEM" "$XMX"
-    printf 'seconds\t%s\n' "$((t1 - t0))"
-    printf 'records_in\t%s\nrecords_out\t%s\n' "$n_in" "$n_out"
-    samtools flagstat -@ "$THREADS" "$IN" | awk '{n=$1; $1=""; $2=""; sub(/^ +/, ""); print "flagstat_in:" $0 "\t" n}'
-    samtools flagstat -@ "$THREADS" "$OUT.clipped.bam" | awk '{n=$1; $1=""; $2=""; sub(/^ +/, ""); print "flagstat_out:" $0 "\t" n}'
+    printf 'field\tvalue\tqc_failed\n'
+    printf 'fgbio_image\t%s\t\n' "$IMAGE"
+    printf 'fgbio_image_id\t%s\t\n' "$image_id"
+    printf 'fgbio_version\t%s\t\n' "$fgbio_version"
+    printf 'samtools_version\t%s\t\n' "$samtools_version"
+    printf 'clipbam_args\t%s\t\n' "-c Soft --clip-overlapping-reads true"
+    printf 'threads\t%s\t\nsort_mem_per_thread\t%s\t\nfgbio_heap_gb\t%s\t\n' "$THREADS" "$SORT_MEM" "$XMX"
+    printf 'seconds\t%s\t\n' "$((t1 - t0))"
+    printf 'records_in\t%s\t\nrecords_out\t%s\t\n' "$n_in" "$n_out"
+    # samtools flagstat -O tsv: QC-passed count, QC-failed count, description; percentage rows are skipped
+    awk -F'\t' '$1 ~ /^[0-9]+$/ {print "flagstat_in:" $3 "\t" $1 "\t" $2}' <<< "$flag_in"
+    awk -F'\t' '$1 ~ /^[0-9]+$/ {print "flagstat_out:" $3 "\t" $1 "\t" $2}' <<< "$flag_out"
 } > "$OUT.provenance.tsv"
 echo "clip_overlap: $n_out records, $((t1 - t0)) s; wrote $OUT.clipped.bam"

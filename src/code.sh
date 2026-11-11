@@ -43,8 +43,10 @@ main() {
     samtools --version | head -1
     mkdir -p ~/out
     bash /home/dnanexus/clip_overlap.sh -i "$bam_path" -r "$ref" -o ~/out/"$prefix" -I "$IMAGE" -w ~/work
-    printf 'app\t%s\n' "$(python3 -c 'import json; d = json.load(open("/home/dnanexus/dnanexus-executable.json")); print(d["name"], d.get("version", ""), d["id"])' 2>/dev/null || echo unknown)" \
-        >> ~/out/"$prefix".provenance.tsv
+    # the executable that ran (name, version, ID) is part of the provenance; failing to read it fails the job
+    app_desc=$(python3 -c 'import json; d = json.load(open("/home/dnanexus/dnanexus-executable.json")); print(d["name"], d.get("version", ""), d["id"])')
+    [ -n "$app_desc" ] || { echo "ERROR: could not read the executable description" >&2; exit 1; }
+    printf 'app\t%s\t\n' "$app_desc" >> ~/out/"$prefix".provenance.tsv
 
     echo "=== Uploading outputs"
     for pair in "clipped_bam:clipped.bam" "clipped_bai:clipped.bam.bai" "clipbam_metrics:clipbam_metrics.txt" \
