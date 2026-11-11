@@ -1,0 +1,10 @@
+line-length = 130
+
+[lint]
+select = ["E9", "F", "B", "S", "BLE"]
+ignore = ["S101"]  # pytest asserts
+
+[lint.per-file-ignores]
+# The tests run the app's own script and samtools with fixed argument lists (S603, S607), and draw a synthetic reference
+# sequence from a seeded generator, not for any security purpose (S311).
+"tests/*.py" = ["S603", "S607", "S311"]

@@ -1,6 +1,5 @@
 #!/bin/bash
-# Input variables (bam_path, reference_fasta_name, ...) are set by DNAnexus and dx-download-all-inputs.
-# shellcheck disable=SC2154
+# shellcheck disable=SC2154  # input variables (bam_path, reference_fasta_name, ...) are set by DNAnexus and dx-download-all-inputs
 # eggd_fgbio: fgbio tools on DNAnexus. v1.0.0 runs fgbio 4.1.1 ClipBam to soft-clip overlapping read pairs in a BAM,
 # the input to AMBER in the Atlas CNV workflow's PURPLE arm (DI-4247). The pipeline itself is
 # /home/dnanexus/clip_overlap.sh; this file only handles DNAnexus input and output.
