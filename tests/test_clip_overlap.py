@@ -1,10 +1,13 @@
 """Tests for resources/home/dnanexus/clip_overlap.sh on a small synthetic BAM.
 
-Needs samtools on PATH and the fgbio image (quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0) in the local docker daemon;
-CI pulls it by digest. The reference and reads are generated here (random sequence, fixed seed), so no patient data.
+Needs samtools and bgzip on PATH and the fgbio image (quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0) in the local docker
+daemon; CI builds samtools/htslib 1.24 (the version the app uses) and pulls the image by digest. The reference and reads
+are generated here (random sequence, fixed seed), so no patient data.
 """
+import os
 import random
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -38,6 +41,9 @@ def data(tmp_path_factory):
     fa = d / "ref.fa"
     fa.write_text("".join(f">{c}\n" + "\n".join(s[i:i + 60] for i in range(0, len(s), 60)) + "\n" for c, s in seq.items()))
     run(["samtools", "faidx", str(fa)])
+    with open(d / "ref.fa.gz", "wb") as gz:  # bgzipped copy, as the production reference
+        subprocess.run(["bgzip", "-c", str(fa)], check=True, stdout=gz)
+    run(["samtools", "faidx", str(d / "ref.fa.gz")])
     lines = ["@HD\tVN:1.6\tSO:unsorted"] + [f"@SQ\tSN:{c}\tLN:{len(s)}" for c, s in seq.items()] + \
             ["@RG\tID:rg1\tSM:synthetic\tPL:ILLUMINA"]
     q = "I" * READ_LEN
@@ -57,10 +63,11 @@ def data(tmp_path_factory):
 
 
 def records(bam):
+    """(name, read1/read2 bits) -> dict of flag, pos, cigar, seq, qual (tags are left out: fgbio may update them)."""
     out = {}
     for line in run(["samtools", "view", str(bam)]).stdout.splitlines():
         f = line.split("\t")
-        out[(f[0], int(f[1]) & 0xC0)] = (int(f[3]), f[5])
+        out[(f[0], int(f[1]) & 0xC0)] = {"flag": f[1], "pos": int(f[3]), "cigar": f[5], "seq": f[9], "qual": f[10]}
     return out
 
 
@@ -72,6 +79,15 @@ def ref_end(pos, cigar):
 def clipped(data, tmp_path_factory):
     o = tmp_path_factory.mktemp("out")
     run(["bash", str(SCRIPT), "-i", str(data / "in.bam"), "-r", str(data / "ref.fa"), "-o", str(o / "s"), "-t", "2",
+         "-m", "100M", "-x", "1", "-w", str(o / "work")])
+    return o
+
+
+@pytest.fixture(scope="module")
+def clipped_bgzf(data, tmp_path_factory):
+    """The same run with the bgzipped reference (.fa.gz with .fai and .gzi), as in production."""
+    o = tmp_path_factory.mktemp("out_bgzf")
+    run(["bash", str(SCRIPT), "-i", str(data / "in.bam"), "-r", str(data / "ref.fa.gz"), "-o", str(o / "s"), "-t", "2",
          "-m", "100M", "-x", "1", "-w", str(o / "work")])
     return o
 
@@ -88,26 +104,68 @@ def test_record_count_unchanged(data, clipped):
 def test_overlapping_pairs_no_longer_overlap(clipped):
     rec = records(clipped / "s.clipped.bam")
     for name in ("overlap_40", "overlap_full"):
-        (p1, c1), (p2, c2) = rec[(name, 0x40)], rec[(name, 0x80)]
+        r1, r2 = rec[(name, 0x40)], rec[(name, 0x80)]
+        p1, c1, p2, c2 = r1["pos"], r1["cigar"], r2["pos"], r2["cigar"]
         assert "S" in c1 + c2, (name, c1, c2)
         assert ref_end(p1, c1) < p2 or ref_end(p2, c2) < p1, (name, p1, c1, p2, c2)
     # 40 overlapping bases are split between the two reads
-    (p1, c1), (p2, c2) = rec[("overlap_40", 0x40)], rec[("overlap_40", 0x80)]
-    assert ref_end(p1, c1) - p1 + 1 + ref_end(p2, c2) - p2 + 1 == 2 * READ_LEN - 40
+    r1, r2 = rec[("overlap_40", 0x40)], rec[("overlap_40", 0x80)]
+    assert ref_end(r1["pos"], r1["cigar"]) - r1["pos"] + 1 + ref_end(r2["pos"], r2["cigar"]) - r2["pos"] + 1 == 2 * READ_LEN - 40
 
 
-def test_other_reads_unchanged(data, clipped):
+def test_clipping_keeps_flags_sequence_and_qualities(data, clipped):
+    """Soft clipping keeps every base: flag, sequence and qualities are unchanged for all reads, clipped or not."""
+    before, after = records(data / "in.bam"), records(clipped / "s.clipped.bam")
+    for key in before:
+        for field in ("flag", "seq", "qual"):
+            assert after[key][field] == before[key][field], (key, field)
+
+
+def test_other_reads_keep_position_and_cigar(data, clipped):
+    """Reads that do not overlap their mate keep flag, position, CIGAR, sequence and qualities (tags may change)."""
     before, after = records(data / "in.bam"), records(clipped / "s.clipped.bam")
     for key in before:
         if key[0] not in ("overlap_40", "overlap_full"):
             assert after[key] == before[key], key
 
 
+def test_bgzipped_reference_gives_the_same_records(clipped, clipped_bgzf):
+    assert records(clipped_bgzf / "s.clipped.bam") == records(clipped / "s.clipped.bam")
+
+
+def provenance(path):
+    rows = [line.split("\t") for line in path.read_text().splitlines()]
+    assert rows[0] == ["field", "value", "qc_failed"] and all(len(r) == 3 for r in rows), rows
+    return {r[0]: (r[1], r[2]) for r in rows[1:]}
+
+
 def test_provenance(clipped):
-    prov = dict(line.split("\t", 1) for line in (clipped / "s.provenance.tsv").read_text().splitlines()[1:])
-    assert prov["fgbio_version"].strip() == "4.1.1"
-    assert prov["fgbio_image"].strip() == IMAGE
-    assert prov["records_in"] == prov["records_out"]
+    prov = provenance(clipped / "s.provenance.tsv")
+    assert prov["fgbio_version"][0] == "4.1.1"
+    assert prov["fgbio_image"][0] == IMAGE
+    assert prov["fgbio_image_id"][0].startswith("sha256:")
+    assert re.fullmatch(r"\d+\.\d+(\.\d+)?", prov["samtools_version"][0])
+    assert prov["records_in"] == prov["records_out"] == (str(2 * len(PAIRS) + 2), "")
+    # flagstat keys are fixed descriptions with separate QC-passed and QC-failed counts
+    for side in ("in", "out"):
+        assert prov[f"flagstat_{side}:total (QC-passed reads + QC-failed reads)"] == (str(2 * len(PAIRS) + 2), "0")
+        assert prov[f"flagstat_{side}:paired in sequencing"] == (str(2 * len(PAIRS) + 2), "0")
+        assert not any("%" in k for k in prov if k.startswith(f"flagstat_{side}:"))
+
+
+def test_unreadable_provenance_value_fails(data, tmp_path):
+    """A samtools whose --version prints nothing: the job fails instead of writing incomplete provenance."""
+    real = shutil.which("samtools")
+    fake = tmp_path / "bin" / "samtools"
+    fake.parent.mkdir()
+    fake.write_text(f'#!/bin/bash\n[ "$1" = --version ] && exit 0\nexec {real} "$@"\n')
+    fake.chmod(0o755)
+    env = dict(os.environ, PATH=f"{fake.parent}:{os.environ['PATH']}")
+    r = subprocess.run(["bash", str(SCRIPT), "-i", str(data / "in.bam"), "-r", str(data / "ref.fa"), "-o",
+                        str(tmp_path / "s"), "-t", "2", "-m", "100M", "-x", "1", "-w", str(tmp_path / "work")],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 1 and "provenance value samtools_version could not be read" in r.stderr
+    assert not (tmp_path / "s.provenance.tsv").exists()
 
 
 def test_missing_fai_fails(data, tmp_path):
