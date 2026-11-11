@@ -54,7 +54,7 @@ dx run eggd_fgbio \
   -ireference_gzi=$R:file-Gb735Vj4XGyj2ZPbzjfYxZxX
 ```
 
-The default instance is `mem2_ssd1_v2_x16`; a 6 GB panel BAM takes about 20 minutes.
+The default instance is `mem2_ssd1_v2_x16`; a 6 GB panel BAM (about 100 million reads) takes about 30 minutes.
 
 ## Dependencies
 
@@ -76,7 +76,7 @@ docker tag quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c
 python -m pip install -r requirements-dev.txt && python -m pytest tests
 ```
 
-CI (`.github/workflows/ci.yml`) runs these tests and ShellCheck on every push and pull request.
+CI (`.github/workflows/ci.yml`) runs these tests, ShellCheck and Ruff on every push and pull request.
 
 ## Making the bundled image
 
