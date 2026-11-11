@@ -1,6 +1,7 @@
 name: ci
 on:
   push:
+    branches: [main]   # PR commits are tested by pull_request; main is tested after each merge
   pull_request:
 permissions:
   contents: read
@@ -43,7 +44,7 @@ jobs:
           echo "$HOME/st/bin" >> "$GITHUB_PATH"
       - name: Python test dependencies
         run: python -m pip install -r requirements-dev.txt
-      - name: fgbio image, pinned by digest (the app bundles the same image)
+      - name: fgbio image, pinned by digest (the same image as the app's fgbio 4.1.1 input file)
         run: |
           docker pull quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace
           docker tag quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace \
