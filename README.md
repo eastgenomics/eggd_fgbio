@@ -36,6 +36,8 @@ leads PURPLE to false low-purity fits (Confluence DV page 4871323786). COBALT, S
 | `reference_fasta` | yes | FASTA the BAM is aligned to, plain or bgzipped (Atlas: GRCh38 GIABv3, `project-Fkb6Gkj433GVVvj73J7x8KbV:file-Gb73P8Q4XGyX9QZ0g9qp61xV`). |
 | `reference_fai` | yes | `<reference_fasta>.fai`. |
 | `reference_gzi` | if bgzipped | `<reference_fasta>.gzi`. |
+| `fgbio_docker` | yes | The fgbio Docker image as a `docker save` tarball, optionally gzipped, holding exactly one tagged image (fgbio 4.1.1: `project-Fkb6Gkj433GVVvj73J7x8KbV:file-JFp7fG0453KjK25zPx1bYF8J`; see below). |
+| `fgbio_version` | yes | The fgbio version the image must hold, e.g. `4.1.1`. The job fails before any work if the image's `fgbio --version` differs. |
 | `output_prefix` | no | Output file prefix; defaults to the BAM name without `.bam`. |
 
 A sequence dictionary for the reference is made on the worker with `samtools dict`.
@@ -59,16 +61,21 @@ dx run eggd_fgbio \
   -ibam=project-xxxx:file-xxxx \
   -ireference_fasta=$R:file-Gb73P8Q4XGyX9QZ0g9qp61xV \
   -ireference_fai=$R:file-Gb735V84XGyYkXYPqGqgz14j \
-  -ireference_gzi=$R:file-Gb735Vj4XGyj2ZPbzjfYxZxX
+  -ireference_gzi=$R:file-Gb735Vj4XGyj2ZPbzjfYxZxX \
+  -ifgbio_docker=$R:file-JFp7fG0453KjK25zPx1bYF8J \
+  -ifgbio_version=4.1.1
 ```
 
 The default instance is `mem2_ssd1_v2_x16`; a 6 GB panel BAM (about 100 million reads) takes about 30 minutes.
 
 ## Dependencies
 
-- **fgbio 4.1.1**: the image `quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace`
-  (tag `4.1.1--hdfd78af_0`), saved with `docker save` and bundled with the app (`runSpec.bundledDepends`). The app checks
-  the saved image's SHA-256 (`6740248d…99c6`) before loading it, so no image is pulled at run time.
+- **fgbio**: an input, not part of the app, so a new image can be used without changing the app. The workflow configuration
+  supplies the image file and the version it holds; the app loads the file (no image is pulled at run time), checks that
+  `fgbio --version` is that version, and records the file, its SHA-256 and the image ID in the provenance. For fgbio 4.1.1
+  the file is `file-JFp7fG0453KjK25zPx1bYF8J` (001_Reference `/app_assets/fgbio/fgbio_4.1.1/`), made from
+  `quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace`
+  (tag `4.1.1--hdfd78af_0`; image ID `sha256:c2b12e41…5862`; file SHA-256 `bdbb1827…8b8a`).
 - **samtools**: `htslib_suite_asset` 1.24 (`record-J9QzZyj487v9Gj2QgP7vK47g`).
 
 ## Tests
@@ -77,7 +84,8 @@ The default instance is `mem2_ssd1_v2_x16`; a 6 GB panel BAM (about 100 million 
 the test). It checks that overlapping pairs are clipped and no longer overlap; that flags, sequences and qualities are
 unchanged for every read, and positions and CIGARs for reads that do not overlap their mate; that the record count is
 kept; that a bgzipped reference gives the same records as a plain one; that the provenance has its fields; and that bad
-inputs and an unreadable provenance value fail with an `ERROR:` message. It needs samtools, bgzip and the fgbio image in
+inputs, an image with a different fgbio version, a malformed version and an unreadable provenance value fail with an
+`ERROR:` message. It needs samtools, bgzip and the fgbio image in
 the local docker daemon:
 
 ```bash
@@ -88,24 +96,21 @@ python -m pip install -r requirements-dev.txt && python -m pytest tests
 ```
 
 CI (`.github/workflows/ci.yml`) runs these tests with samtools/htslib 1.24 (the app's version, built from the release
-tarball), ShellCheck 0.11.0 and Ruff on every push and pull request.
+tarball), ShellCheck 0.11.0 and Ruff on every pull request and on every push to `main`.
 
-## Making the bundled image
+## Making the image file
 
 ```bash
 docker pull quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace
 docker tag  quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace \
   quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0
-mkdir -p bundle/home/dnanexus/fgbio_image
-docker save quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0 -o bundle/home/dnanexus/fgbio_image/fgbio_4.1.1--hdfd78af_0.docker.tar
-tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='2026-11-11 00:00Z' -C bundle -cf - home \
-  | gzip -n -6 > fgbio_4.1.1--hdfd78af_0.bundle.tar.gz
+docker save quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0 | gzip -n -6 > fgbio_4.1.1--hdfd78af_0.docker.tar.gz
+sha256sum fgbio_4.1.1--hdfd78af_0.docker.tar.gz
 ```
 
-The bundle is uploaded to DNAnexus and its file ID set in `dxapp.json`; the SHA-256 of the inner `.docker.tar` is set
-in `src/code.sh`. The v1.0.0 bundle is `file-JFp2PYj453Kg6KGFB694q6bf`, in 001_Reference at
-`/app_assets/fgbio/fgbio_4.1.1/` (a copy into another project keeps the file ID). `dx build --app` copies it into the
-app, so the built app does not depend on the source file.
+Keep exactly one tag in the saved image: the app runs the image that `docker load` reports. Upload the file to
+001_Reference under `/app_assets/fgbio/fgbio_<version>/` and give the file ID and version to the workflow configuration;
+no app change is needed for a new fgbio version.
 
 ## Release
 
