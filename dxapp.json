@@ -1,117 +1,125 @@
 {
-  "name": "eggd_<tool_name>",
-  "title": "eggd_<tool_name>",
-  "summary": "description",
+  "name": "eggd_fgbio",
+  "title": "eggd_fgbio",
+  "summary": "fgbio ClipBam: soft-clip overlapping read pairs in a BAM (AMBER input, Atlas CNV workflow)",
   "dxapi": "1.0.0",
   "version": "1.0.0",
   "properties": {
-    "githubRelease": "1.0.0"
-    },
+    "githubRelease": "v1.0.0"
+  },
   "inputSpec": [
     {
-      "name": "input_file",
+      "name": "bam",
       "class": "file",
-      "optional": true,
-      "label": "Name of input file",
-      "patterns": [
-        "*.tsv", "*.vcf", "*.bed", "*.xlsx"
-      ],
-      "help": "Description"
+      "label": "Coordinate-sorted BAM",
+      "patterns": ["*.bam"],
+      "help": "Paired-end BAM to clip. Its index is not needed."
     },
     {
-      "name": "input_file_array",
-      "class": "array:file",
-      "optional": false,
-      "label": "Name of input file array",
+      "name": "reference_fasta",
+      "class": "file",
+      "label": "Reference FASTA the BAM is aligned to",
+      "patterns": ["*.fa", "*.fasta", "*.fa.gz", "*.fasta.gz"],
       "suggestions": [
         {
-        "project": "project-Fkb6Gkj433GVVvj73J7x8KbV",
-        "path": "/folder1/folder2/"
+          "name": "GRCh38 GIABv3 (Atlas)",
+          "value": {"$dnanexus_link": {"project": "project-Fkb6Gkj433GVVvj73J7x8KbV", "id": "file-Gb73P8Q4XGyX9QZ0g9qp61xV"}}
         }
       ],
-      "help": "Description"
+      "help": "Plain or bgzipped FASTA. A sequence dictionary is made on the worker."
     },
     {
-      "name": "input_boolean",
-      "class": "boolean",
+      "name": "reference_fai",
+      "class": "file",
+      "label": "FASTA index (<reference_fasta>.fai)",
+      "patterns": ["*.fai"],
+      "help": "Must be named after reference_fasta, with .fai added."
+    },
+    {
+      "name": "reference_gzi",
+      "class": "file",
       "optional": true,
-      "default": true,
-      "label": "Name of field",
-      "help": "Description"
+      "label": "bgzip index (<reference_fasta>.gzi)",
+      "patterns": ["*.gzi"],
+      "help": "Required when reference_fasta is bgzipped; named after reference_fasta, with .gzi added."
     },
     {
-      "name": "input_string",
+      "name": "fgbio_docker",
+      "class": "file",
+      "label": "fgbio Docker image (docker save tarball, gzipped)",
+      "patterns": ["*.docker.tar.gz", "*.tar.gz"],
+      "suggestions": [
+        {
+          "name": "fgbio 4.1.1 (quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0)",
+          "value": {"$dnanexus_link": {"project": "project-Fkb6Gkj433GVVvj73J7x8KbV", "id": "file-JFp7fG0453KjK25zPx1bYF8J"}}
+        }
+      ],
+      "help": "A `docker save` tarball, optionally gzipped, holding exactly one tagged fgbio image. Its `fgbio --version` must equal fgbio_version."
+    },
+    {
+      "name": "fgbio_version",
       "class": "string",
-      "label": "Input string field name",
+      "label": "fgbio version in the image (e.g. 4.1.1)",
+      "help": "The job fails, before any work is done, if the image's `fgbio --version` is not this version."
+    },
+    {
+      "name": "output_prefix",
+      "class": "string",
       "optional": true,
-      "default": "default string input",
-      "help": "Description"
+      "label": "Output file prefix",
+      "help": "Defaults to the BAM name without .bam. Outputs are <prefix>.clipped.bam, .clipped.bam.bai, .clipbam_metrics.txt and .provenance.tsv."
     }
   ],
   "outputSpec": [
     {
-      "name": "output_file",
+      "name": "clipped_bam",
       "class": "file",
-      "label": "output file",
-      "patterns": [
-        "*.tsv", "*.vcf", "*.bed", "*.xlsx"
-      ],
-      "help": "Description"
+      "label": "Clipped BAM (coordinate-sorted)",
+      "patterns": ["*.clipped.bam"]
     },
     {
-      "name": "output_files_array",
-      "class": "array:file",
-      "label": "output files",
-      "optional": true,
-      "help": "Description"
+      "name": "clipped_bai",
+      "class": "file",
+      "label": "Clipped BAM index",
+      "patterns": ["*.clipped.bam.bai"]
+    },
+    {
+      "name": "clipbam_metrics",
+      "class": "file",
+      "label": "fgbio ClipBam metrics",
+      "patterns": ["*.clipbam_metrics.txt"]
+    },
+    {
+      "name": "provenance",
+      "class": "file",
+      "label": "Versions, image, settings, runtime and record counts",
+      "patterns": ["*.provenance.tsv"]
     }
-
   ],
   "runSpec": {
-    "timeoutPolicy": {
-      "*": {
-        "hours": 2
-      }
-    },
-    "distribution": "Ubuntu",
-    "release": "20.04",
-    "version": "0",
     "interpreter": "bash",
     "file": "src/code.sh",
+    "distribution": "Ubuntu",
+    "release": "24.04",
+    "version": "0",
+    "timeoutPolicy": {"*": {"hours": 6}},
+    "headJobOnDemand": false,
     "assetDepends": [
       {
-        "name": "bedtools",
-        "project": "project-Fkb6Gkj433GVVvj73J7x8KbV",
-        "folder": "/app_assets/bedtools/bedtools_v2.30.0",
-        "version": "2.30.0"
-      },
-      {
-        "name": "htslib",
-        "project": "project-Fkb6Gkj433GVVvj73J7x8KbV",
-        "folder": "/app_assets/htslib/htslib_v1.15.0",
-        "version": "1.15.0"
-      },
-      {
-        "name": "python_packages",
-        "project": "project-Fkb6Gkj433GVVvj73J7x8KbV",
-        "folder": "/app_assets/python_packages/python_packages_v1.1.0",
-        "version": "1.1.0"
+        "name": "htslib_suite_asset",
+        "version": "1.24",
+        "id": "record-J9QzZyj487v9Gj2QgP7vK47g"
       }
     ]
   },
-  "developers":[
-    "org-emee_1"
-  ],
-  "authorizedUsers": [
-    "org-emee_1"
-  ],
+  "developers": ["org-emee_1"],
+  "authorizedUsers": ["org-emee_1"],
   "regionalOptions": {
     "aws:eu-central-1": {
       "systemRequirements": {
-        "*": {
-          "instanceType": "mem1_ssd1_v2_x2"
-        }
+        "*": {"instanceType": "mem2_ssd1_v2_x16"}
       }
     }
-  }
+  },
+  "ignoreReuse": false
 }
