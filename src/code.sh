@@ -1,25 +1,27 @@
 #!/bin/bash
 # shellcheck disable=SC2154  # input variables (bam_path, reference_fasta_name, ...) are set by DNAnexus and dx-download-all-inputs
-# eggd_fgbio: fgbio tools on DNAnexus. v1.0.0 runs fgbio 4.1.1 ClipBam to soft-clip overlapping read pairs in a BAM,
-# the input to AMBER in the Atlas CNV workflow's PURPLE arm (DI-4247). The pipeline itself is
-# /home/dnanexus/clip_overlap.sh; this file only handles DNAnexus input and output.
+# eggd_fgbio: fgbio tools on DNAnexus. v1.0.0 runs fgbio ClipBam to soft-clip overlapping read pairs in a BAM, the input
+# to AMBER in the Atlas CNV workflow's PURPLE arm (DI-4247). The fgbio Docker image and the fgbio version it must hold are
+# inputs, so a new image can be used without changing the app; the job fails if the two do not match. The pipeline itself
+# is /home/dnanexus/clip_overlap.sh; this file only handles DNAnexus input and output.
 set -exo pipefail
 
-# fgbio image, bundled with the app (runSpec.bundledDepends) as a `docker save` tar of
-# quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace
-IMAGE="quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0"
-IMAGE_TAR="/home/dnanexus/fgbio_image/fgbio_4.1.1--hdfd78af_0.docker.tar"
-IMAGE_TAR_SHA256="6740248d07c7049def1331f030f27e35cc4096c46cce1913021dbe83f6bb99c6"
-
 main() {
-    echo "=== Checking and loading the fgbio image"
-    echo "${IMAGE_TAR_SHA256}  ${IMAGE_TAR}" | sha256sum -c -
-    docker load -i "$IMAGE_TAR"
-    docker image inspect --format '{{.Id}}' "$IMAGE"
-    rm -f "$IMAGE_TAR"
-
     echo "=== Downloading inputs"
     dx-download-all-inputs --parallel
+
+    echo "=== Loading the fgbio image"
+    image_sha256=$(sha256sum "$fgbio_docker_path" | cut -d' ' -f1)
+    load_out=$(docker load -i "$fgbio_docker_path")
+    echo "$load_out"
+    # exactly one tagged image: the tag is what the pipeline runs
+    image=$(sed -n 's/^Loaded image: //p' <<< "$load_out")
+    if [ -z "$image" ] || [ "$(wc -l <<< "$image")" -ne 1 ]; then
+        echo "ERROR: fgbio_docker ($fgbio_docker_name) must hold exactly one tagged image" >&2; exit 1
+    fi
+    rm -f "$fgbio_docker_path"
+    # shellcheck disable=SC2016  # "$dnanexus_link" is a JSON key for Python, not a shell expansion
+    docker_id=$(python3 -c 'import json, sys; v = json.loads(sys.argv[1])["$dnanexus_link"]; print(v if isinstance(v, str) else v["id"])' "$fgbio_docker")
 
     # The reference FASTA and its indexes must be named as one set: <fasta>, <fasta>.fai and (bgzipped) <fasta>.gzi.
     mkdir -p ~/ref
@@ -42,7 +44,7 @@ main() {
     echo "=== Clipping overlapping read pairs"
     samtools --version | head -1
     mkdir -p ~/out
-    bash /home/dnanexus/clip_overlap.sh -i "$bam_path" -r "$ref" -o ~/out/"$prefix" -I "$IMAGE" -w ~/work
+    bash /home/dnanexus/clip_overlap.sh -i "$bam_path" -r "$ref" -o ~/out/"$prefix" -I "$image" -V "$fgbio_version" -w ~/work
     # the executable that ran (name, version, ID) is part of the provenance; failing to read any of it fails the job.
     # Apps have a version; development applets do not, and are recorded as "applet".
     app_desc=$(python3 -c '
@@ -53,7 +55,11 @@ ver = d.get("version", "") if eid.startswith("app-") else "applet"
 if not (name and eid and ver):
     sys.exit("ERROR: the executable description lacks a name, ID or app version")
 print(name, ver, eid)')
-    printf 'app\t%s\t\n' "$app_desc" >> ~/out/"$prefix".provenance.tsv
+    {
+        printf 'app\t%s\t\n' "$app_desc"
+        printf 'fgbio_docker\t%s %s\t\n' "$fgbio_docker_name" "$docker_id"
+        printf 'fgbio_docker_sha256\t%s\t\n' "$image_sha256"
+    } >> ~/out/"$prefix".provenance.tsv
 
     echo "=== Uploading outputs"
     for pair in "clipped_bam:clipped.bam" "clipped_bai:clipped.bam.bai" "clipbam_metrics:clipbam_metrics.txt" \

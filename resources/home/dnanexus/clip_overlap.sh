@@ -4,16 +4,18 @@
 # fgbio clips overlaps between the primary alignments of FR pairs (mates mapped to the same contig, facing each other);
 # secondary and supplementary alignments and other orientations are not clipped. Read tags may be updated.
 #
-# usage: clip_overlap.sh -i <in.bam> -r <ref.fa.gz> -o <out_prefix> [-I <docker image>] [-t <threads>] [-m <sort mem/thread>]
-#                        [-x <fgbio heap GB>] [-w <work dir>]
+# usage: clip_overlap.sh -i <in.bam> -r <ref.fa.gz> -o <out_prefix> -I <docker image> -V <fgbio version> [-t <threads>]
+#                        [-m <sort mem/thread>] [-x <fgbio heap GB>] [-w <work dir>]
 #   <ref.fa.gz> needs <ref.fa.gz>.fai (and .gzi if bgzipped); a sequence dictionary is made with samtools dict if absent.
+#   <docker image> must be loaded and report fgbio <fgbio version> (`fgbio --version`); otherwise nothing is run.
 # Steps (as the validation run, Confluence 4871323786 T7/T8):
 #   samtools sort -n | fgbio ClipBam -c Soft --clip-overlapping-reads true | samtools sort | samtools index
 # Writes <out_prefix>.clipped.bam, .clipped.bam.bai, .clipbam_metrics.txt and .provenance.tsv.
 # Fails if the output does not hold exactly as many records as the input, or if a provenance value cannot be read.
 set -euo pipefail
 
-IMAGE="quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0"
+IMAGE=""
+VERSION=""
 THREADS=$(nproc)
 SORT_MEM="1G"
 XMX=""
@@ -22,12 +24,13 @@ IN=""; REF=""; OUT=""
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-while getopts "i:r:o:I:t:m:x:w:" opt; do
+while getopts "i:r:o:I:V:t:m:x:w:" opt; do
     case $opt in
         i) IN=$OPTARG ;;
         r) REF=$OPTARG ;;
         o) OUT=$OPTARG ;;
         I) IMAGE=$OPTARG ;;
+        V) VERSION=$OPTARG ;;
         t) THREADS=$OPTARG ;;
         m) SORT_MEM=$OPTARG ;;
         x) XMX=$OPTARG ;;
@@ -36,7 +39,10 @@ while getopts "i:r:o:I:t:m:x:w:" opt; do
     esac
 done
 
-if [ -z "$IN" ] || [ -z "$REF" ] || [ -z "$OUT" ]; then die "-i, -r and -o are required"; fi
+if [ -z "$IN" ] || [ -z "$REF" ] || [ -z "$OUT" ] || [ -z "$IMAGE" ] || [ -z "$VERSION" ]; then
+    die "-i, -r, -o, -I and -V are required"
+fi
+if ! [[ $VERSION =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then die "fgbio version '$VERSION' is not a version number such as 4.1.1"; fi
 [ -s "$IN" ] || die "input BAM $IN is missing or empty"
 [ -s "$REF" ] || die "reference FASTA $REF is missing or empty"
 [ -s "$REF.fai" ] || die "reference index $REF.fai is missing"
@@ -44,6 +50,9 @@ case $REF in *.gz) [ -s "$REF.gzi" ] || die "bgzipped reference needs $REF.gzi" 
 if ! [[ $THREADS =~ ^[1-9][0-9]*$ ]]; then die "threads must be a positive integer"; fi
 samtools quickcheck "$IN" || die "input $IN is not a valid BAM"
 docker image inspect "$IMAGE" > /dev/null 2>&1 || die "docker image $IMAGE is not loaded"
+# the image must hold the fgbio version the caller asked for, checked before any work is done
+fgbio_version=$(docker run --rm "$IMAGE" fgbio --version 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | awk '/Version/{print $2}') || true
+[ "$fgbio_version" = "$VERSION" ] || die "docker image $IMAGE has fgbio version '${fgbio_version}', expected $VERSION"
 
 if [ -z "$XMX" ]; then  # heap: total memory less 4 GB, between 4 and 12 GB (as the validation run)
     XMX=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1024 / 1024 - 4 ))
@@ -83,7 +92,6 @@ n_out=$(samtools view -c -@ "$THREADS" "$OUT.clipped.bam")
 
 # provenance: every value is read and checked before the file is written; a missing value fails the job
 image_id=$(docker image inspect --format '{{.Id}}' "$IMAGE")
-fgbio_version=$("${DK[@]}" fgbio --version 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | awk '/Version/{print $2}')
 samtools_version=$(samtools --version | awk 'NR == 1 {print $2}')
 flag_in=$(samtools flagstat -O tsv -@ "$THREADS" "$IN")
 flag_out=$(samtools flagstat -O tsv -@ "$THREADS" "$OUT.clipped.bam")
@@ -95,6 +103,7 @@ done
     printf 'fgbio_image\t%s\t\n' "$IMAGE"
     printf 'fgbio_image_id\t%s\t\n' "$image_id"
     printf 'fgbio_version\t%s\t\n' "$fgbio_version"
+    printf 'fgbio_version_expected\t%s\t\n' "$VERSION"
     printf 'samtools_version\t%s\t\n' "$samtools_version"
     printf 'clipbam_args\t%s\t\n' "-c Soft --clip-overlapping-reads true"
     printf 'threads\t%s\t\nsort_mem_per_thread\t%s\t\nfgbio_heap_gb\t%s\t\n' "$THREADS" "$SORT_MEM" "$XMX"

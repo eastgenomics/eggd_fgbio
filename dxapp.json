@@ -1,7 +1,7 @@
 {
   "name": "eggd_fgbio",
   "title": "eggd_fgbio",
-  "summary": "fgbio 4.1.1 ClipBam: soft-clip overlapping read pairs in a BAM (AMBER input, Atlas CNV workflow)",
+  "summary": "fgbio ClipBam: soft-clip overlapping read pairs in a BAM (AMBER input, Atlas CNV workflow)",
   "dxapi": "1.0.0",
   "version": "1.0.0",
   "properties": {
@@ -42,6 +42,25 @@
       "label": "bgzip index (<reference_fasta>.gzi)",
       "patterns": ["*.gzi"],
       "help": "Required when reference_fasta is bgzipped; named after reference_fasta, with .gzi added."
+    },
+    {
+      "name": "fgbio_docker",
+      "class": "file",
+      "label": "fgbio Docker image (docker save tarball, gzipped)",
+      "patterns": ["*.docker.tar.gz", "*.tar.gz"],
+      "suggestions": [
+        {
+          "name": "fgbio 4.1.1 (quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0)",
+          "value": {"$dnanexus_link": {"project": "project-Fkb6Gkj433GVVvj73J7x8KbV", "id": "file-JFp7fG0453KjK25zPx1bYF8J"}}
+        }
+      ],
+      "help": "A `docker save` tarball, optionally gzipped, holding exactly one tagged fgbio image. Its `fgbio --version` must equal fgbio_version."
+    },
+    {
+      "name": "fgbio_version",
+      "class": "string",
+      "label": "fgbio version in the image (e.g. 4.1.1)",
+      "help": "The job fails, before any work is done, if the image's `fgbio --version` is not this version."
     },
     {
       "name": "output_prefix",
@@ -90,12 +109,6 @@
         "name": "htslib_suite_asset",
         "version": "1.24",
         "id": "record-J9QzZyj487v9Gj2QgP7vK47g"
-      }
-    ],
-    "bundledDepends": [
-      {
-        "name": "fgbio_4.1.1--hdfd78af_0.bundle.tar.gz",
-        "id": {"$dnanexus_link": "file-JFp2PYj453Kg6KGFB694q6bf"}
       }
     ]
   },
