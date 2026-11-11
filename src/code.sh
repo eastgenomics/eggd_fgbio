@@ -3,7 +3,7 @@
 # eggd_fgbio: fgbio tools on DNAnexus. v1.0.0 runs fgbio ClipBam to soft-clip overlapping read pairs in a BAM, the input
 # to AMBER in the Atlas CNV workflow's PURPLE arm (DI-4247). The fgbio Docker image and the fgbio version it must hold are
 # inputs, so a new image can be used without changing the app; the job fails if the two do not match. The pipeline itself
-# is /home/dnanexus/clip_overlap.sh; this file only handles DNAnexus input and output.
+# is ~/clip_overlap.sh (HOME is /home/dnanexus on the worker); this file only handles DNAnexus input and output.
 set -exo pipefail
 
 main() {
@@ -44,12 +44,12 @@ main() {
     echo "=== Clipping overlapping read pairs"
     samtools --version | head -1
     mkdir -p ~/out
-    bash /home/dnanexus/clip_overlap.sh -i "$bam_path" -r "$ref" -o ~/out/"$prefix" -I "$image" -V "$fgbio_version" -w ~/work
+    bash ~/clip_overlap.sh -i "$bam_path" -r "$ref" -o ~/out/"$prefix" -I "$image" -V "$fgbio_version" -w ~/work
     # the executable that ran (name, version, ID) is part of the provenance; failing to read any of it fails the job.
     # Apps have a version; development applets do not, and are recorded as "applet".
     app_desc=$(python3 -c '
-import json, sys
-d = json.load(open("/home/dnanexus/dnanexus-executable.json"))
+import json, os, sys
+d = json.load(open(os.path.expanduser("~/dnanexus-executable.json")))
 name, eid = d.get("name", ""), d.get("id", "")
 ver = d.get("version", "") if eid.startswith("app-") else "applet"
 if not (name and eid and ver):
