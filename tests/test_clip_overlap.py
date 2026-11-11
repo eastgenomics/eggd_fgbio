@@ -15,6 +15,8 @@ import pytest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "resources/home/dnanexus/clip_overlap.sh"
 IMAGE = "quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0"
+FGBIO_VERSION = "4.1.1"
+SCRIPT_CMD = ["bash", str(SCRIPT), "-I", IMAGE, "-V", FGBIO_VERSION]  # the script with the image and its fgbio version
 READ_LEN = 100
 # name: (pos1, pos2), 1-based leftmost positions of read 1 (forward) and read 2 (reverse) on chr1
 PAIRS = {
@@ -91,7 +93,7 @@ def ref_end(pos, cigar):
 def clipped(data, tmp_path_factory):
     """Run clip_overlap.sh on the synthetic BAM with the plain reference and return its output directory."""
     o = tmp_path_factory.mktemp("out")
-    run(["bash", str(SCRIPT), "-i", str(data / "in.bam"), "-r", str(data / "ref.fa"), "-o", str(o / "s"), "-t", "2",
+    run([*SCRIPT_CMD, "-i", str(data / "in.bam"), "-r", str(data / "ref.fa"), "-o", str(o / "s"), "-t", "2",
          "-m", "100M", "-x", "1", "-w", str(o / "work")])
     return o
 
@@ -100,7 +102,7 @@ def clipped(data, tmp_path_factory):
 def clipped_bgzf(data, tmp_path_factory):
     """Run clip_overlap.sh with the bgzipped reference (.fa.gz, .fai, .gzi), as in production; return its output directory."""
     o = tmp_path_factory.mktemp("out_bgzf")
-    run(["bash", str(SCRIPT), "-i", str(data / "in.bam"), "-r", str(data / "ref.fa.gz"), "-o", str(o / "s"), "-t", "2",
+    run([*SCRIPT_CMD, "-i", str(data / "in.bam"), "-r", str(data / "ref.fa.gz"), "-o", str(o / "s"), "-t", "2",
          "-m", "100M", "-x", "1", "-w", str(o / "work")])
     return o
 
@@ -164,7 +166,7 @@ def provenance(path):
 def test_provenance(clipped):
     """Check the provenance fields, versions, image ID, record counts and flagstat rows of a run."""
     prov = provenance(clipped / "s.provenance.tsv")
-    assert prov["fgbio_version"][0] == "4.1.1"
+    assert prov["fgbio_version"][0] == prov["fgbio_version_expected"][0] == FGBIO_VERSION
     assert prov["fgbio_image"][0] == IMAGE
     assert prov["fgbio_image_id"][0].startswith("sha256:")
     assert re.fullmatch(r"\d+\.\d+(\.\d+)?", prov["samtools_version"][0])
@@ -184,7 +186,7 @@ def test_unreadable_provenance_value_fails(data, tmp_path):
     fake.write_text(f'#!/bin/bash\n[ "$1" = --version ] && exit 0\nexec {real} "$@"\n')
     fake.chmod(0o755)
     env = dict(os.environ, PATH=f"{fake.parent}:{os.environ['PATH']}")
-    r = subprocess.run(["bash", str(SCRIPT), "-i", str(data / "in.bam"), "-r", str(data / "ref.fa"), "-o",
+    r = subprocess.run([*SCRIPT_CMD, "-i", str(data / "in.bam"), "-r", str(data / "ref.fa"), "-o",
                         str(tmp_path / "s"), "-t", "2", "-m", "100M", "-x", "1", "-w", str(tmp_path / "work")],
                        capture_output=True, text=True, env=env)
     assert r.returncode == 1 and "provenance value samtools_version could not be read" in r.stderr
@@ -194,7 +196,7 @@ def test_unreadable_provenance_value_fails(data, tmp_path):
 def test_missing_fai_fails(data, tmp_path):
     """Check that a reference without its .fai index fails with an ERROR: message."""
     (tmp_path / "ref.fa").write_text((data / "ref.fa").read_text())
-    r = subprocess.run(["bash", str(SCRIPT), "-i", str(data / "in.bam"), "-r", str(tmp_path / "ref.fa"),
+    r = subprocess.run([*SCRIPT_CMD, "-i", str(data / "in.bam"), "-r", str(tmp_path / "ref.fa"),
                         "-o", str(tmp_path / "s")], capture_output=True, text=True)
     assert r.returncode == 1 and "ERROR: reference index" in r.stderr
 
@@ -203,13 +205,31 @@ def test_not_a_bam_fails(data, tmp_path):
     """Check that an input that is not a BAM fails with an ERROR: message."""
     bad = tmp_path / "bad.bam"
     bad.write_text("not a bam\n")
-    r = subprocess.run(["bash", str(SCRIPT), "-i", str(bad), "-r", str(data / "ref.fa"), "-o", str(tmp_path / "s")],
+    r = subprocess.run([*SCRIPT_CMD, "-i", str(bad), "-r", str(data / "ref.fa"), "-o", str(tmp_path / "s")],
                        capture_output=True, text=True)
     assert r.returncode == 1 and "ERROR: input" in r.stderr and "is not a valid BAM" in r.stderr
 
 
 def test_missing_image_fails(data, tmp_path):
     """Check that a fgbio image that is not loaded fails with an ERROR: message."""
-    r = subprocess.run(["bash", str(SCRIPT), "-i", str(data / "in.bam"), "-r", str(data / "ref.fa"), "-o",
-                        str(tmp_path / "s"), "-I", "example.invalid/none:0"], capture_output=True, text=True)
+    r = subprocess.run(["bash", str(SCRIPT), "-I", "example.invalid/none:0", "-V", FGBIO_VERSION, "-i", str(data / "in.bam"),
+                        "-r", str(data / "ref.fa"), "-o", str(tmp_path / "s")], capture_output=True, text=True)
     assert r.returncode == 1 and "ERROR: docker image" in r.stderr and "is not loaded" in r.stderr
+
+
+def test_wrong_fgbio_version_fails(data, tmp_path):
+    """Check that an image whose fgbio version is not the one asked for fails before any output is written."""
+    r = subprocess.run(["bash", str(SCRIPT), "-I", IMAGE, "-V", "4.1.2", "-i", str(data / "in.bam"), "-r", str(data / "ref.fa"),
+                        "-o", str(tmp_path / "s"), "-w", str(tmp_path / "work")], capture_output=True, text=True)
+    assert r.returncode == 1, r.stderr
+    assert f"ERROR: docker image {IMAGE} has fgbio version '{FGBIO_VERSION}', expected 4.1.2" in r.stderr
+    assert not list(tmp_path.glob("s.*")) and not (tmp_path / "work").exists()
+
+
+@pytest.mark.parametrize("version", ["", "latest", "4", "4.1.1-SNAPSHOT"])
+def test_malformed_or_missing_fgbio_version_fails(data, tmp_path, version):
+    """Check that a missing or malformed -V value fails with an ERROR: message before the image is run."""
+    r = subprocess.run(["bash", str(SCRIPT), "-I", IMAGE, "-V", version, "-i", str(data / "in.bam"), "-r", str(data / "ref.fa"),
+                        "-o", str(tmp_path / "s")], capture_output=True, text=True)
+    assert r.returncode == 1 and "ERROR: " in r.stderr, r.stderr
+    assert ("are required" in r.stderr) if not version else ("is not a version number" in r.stderr)
