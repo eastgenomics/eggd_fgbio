@@ -85,8 +85,10 @@ the test). It checks that overlapping pairs are clipped and no longer overlap; t
 unchanged for every read, and positions and CIGARs for reads that do not overlap their mate; that the record count is
 kept; that a bgzipped reference gives the same records as a plain one; that the provenance has its fields; and that bad
 inputs, an image with a different fgbio version, a malformed version and an unreadable provenance value fail with an
-`ERROR:` message. It needs samtools, bgzip and the fgbio image in
-the local docker daemon:
+`ERROR:` message. `tests/test_code_entrypoint.py` runs `src/code.sh` with DNAnexus and Docker commands stubbed: the
+loaded image's tag and `fgbio_version` reach the pipeline, the image file's name, ID and SHA-256 and the app are added to
+the provenance, and an image file without exactly one tagged image fails before anything runs. The tests need samtools,
+bgzip and the fgbio image in the local docker daemon:
 
 ```bash
 docker pull quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace
@@ -101,10 +103,13 @@ tarball), ShellCheck 0.11.0 and Ruff on every pull request and on every push to 
 ## Making the image file
 
 ```bash
-docker pull quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace
-docker tag  quay.io/biocontainers/fgbio@sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace \
-  quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0
-docker save quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0 | gzip -n -6 > fgbio_4.1.1--hdfd78af_0.docker.tar.gz
+set -euo pipefail   # stop at the first failure, including a failed docker save inside the pipe
+D=sha256:a1b0630a647886d67bab11992370502e6c9239d1c4fe01f4d0125908980e1ace; T=quay.io/biocontainers/fgbio:4.1.1--hdfd78af_0
+docker pull "quay.io/biocontainers/fgbio@$D"
+docker tag "quay.io/biocontainers/fgbio@$D" "$T"
+[ "$(docker image inspect --format '{{index .RepoDigests 0}}' "$T")" = "quay.io/biocontainers/fgbio@$D" ]   # the tag is that digest
+docker save "$T" | gzip -n -6 > fgbio_4.1.1--hdfd78af_0.docker.tar.gz.tmp
+mv fgbio_4.1.1--hdfd78af_0.docker.tar.gz.tmp fgbio_4.1.1--hdfd78af_0.docker.tar.gz
 sha256sum fgbio_4.1.1--hdfd78af_0.docker.tar.gz
 ```
 
